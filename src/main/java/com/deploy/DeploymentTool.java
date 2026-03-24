@@ -8,25 +8,35 @@ import java.util.Date;
 
 public class DeploymentTool {
 
-    private static final String HOST = "10.72.25.208";
-    private static final String USER = "cloud-user";
-    private static final String KEY = "C:\\Users\\parmahaj\\Documents\\Projects\\ncsmano1.pem";
-
-    private static final String LOCAL_CPIO = "C:\\Users\\parmahaj\\Downloads\\CLI_NEI 30\\CLI_NEI\\JAVA_CLI_ANY_V1-1.1.4.cpio - Copy.Z";
-    private static final String LOCAL_SPEC = "C:\\Users\\parmahaj\\Downloads\\CLI_NEI 30\\CLI_NEI\\CLI_ANY_V1_nei - Copy.specification";
-
-    private static final String REMOTE_PATH = "/data/cloud-user/om/packages/";
-    private static final String RELEASE_PATH = "/data/cloud-user/om/release_area";
-    private static final String INSTALL_PATH = "/data/cloud-user/om/install";
-
-    private static final String PRODUCT = "JAVA_CLI_ANY_V1";
-    private static final String VERSION = "1.1.4";
+//    private static final String HOST = "10.72.25.208";
+//    private static final String USER = "cloud-user";
+//    private static final String KEY = "C:\\Users\\parmahaj\\Documents\\Projects\\ncsmano1.pem";
+//
+//    private static final String LOCAL_CPIO = "C:\\Users\\parmahaj\\Downloads\\CLI_NEI 30\\CLI_NEI\\JAVA_CLI_ANY_V1-1.1.4.cpio - Copy.Z";
+//    private static final String LOCAL_SPEC = "C:\\Users\\parmahaj\\Downloads\\CLI_NEI 30\\CLI_NEI\\CLI_ANY_V1_nei - Copy.specification";
+//
+//    private static final String REMOTE_PATH = "/data/cloud-user/om/packages/";
+//    private static final String RELEASE_PATH = "/data/cloud-user/om/release_area";
+//    private static final String INSTALL_PATH = "/data/cloud-user/om/install";
+//
+//    private static final String PRODUCT = "JAVA_CLI_ANY_V1";
+//    private static final String VERSION = "1.1.4";
 
     private static BufferedWriter logWriter;
 
     public static void main(String[] args) {
         try {
-            initLogger();
+            String HOST = getArg(args, "--host");
+            String USER = getArg(args, "--user");
+            String KEY = getArg(args, "--key");
+            String LOCAL_CPIO = getArg(args, "--local-cpio");
+            String LOCAL_SPEC = getArg(args, "--local-spec");
+            String REMOTE_PATH = getArg(args, "--remote-path");
+            String RELEASE_PATH = getArg(args, "--release-path");
+            String INSTALL_PATH = getArg(args, "--install-path");
+            String PRODUCT = getArg(args, "--product");
+            String VERSION = getArg(args, "--version");
+
             log("DEPLOYMENT STARTED");
 
             JSch jsch = new JSch();
@@ -38,38 +48,12 @@ public class DeploymentTool {
 
             log("Connected to server");
 
-            // ================= UPLOAD =================
-            uploadFile(session, LOCAL_CPIO);
-            uploadFile(session, LOCAL_SPEC);
+            uploadFile(session, LOCAL_CPIO, REMOTE_PATH);
+            uploadFile(session, LOCAL_SPEC, REMOTE_PATH);
 
-            // ================= PERMISSIONS =================
             execute(session, "chmod 777 " + REMOTE_PATH + "*");
 
-            // ================= ACTUAL STEPS =================
-
-            // Step 1: Switch to om + go to release_area
-            execute(session, "sudo su - om -c 'cd " + RELEASE_PATH + " && pwd'");
-
-            // Step 2: List installed products
-            execute(session, "sudo su - om -c 'cd " + RELEASE_PATH + " && ./manage_releases -l'");
-
-            // Step 3: Uninstall
-            execute(session, "sudo su - om -c 'cd " + RELEASE_PATH + " && ./manage_releases --uninstall " + PRODUCT + "'");
-
-            // Step 4: List files
-            execute(session, "sudo su - om -c 'cd " + RELEASE_PATH + " && ls -lrt'");
-
-            // Step 5: Remove old release
-            execute(session, "sudo su - om -c 'cd " + RELEASE_PATH + " && rm -rf " + PRODUCT + "_REL_" + VERSION + "'");
-
-            // Step 6: Install (FINAL COMMAND)
-            execute(session,
-                    "sudo su - om -c 'cd " + RELEASE_PATH +
-                            " && ./manage_releases --hot -r " + RELEASE_PATH +
-                            " -s " + REMOTE_PATH + "CLI_ANY_V1_nei.specification" +
-                            " -i " + INSTALL_PATH +
-                            " -p " + REMOTE_PATH + "'"
-            );
+            executeInteractive(session, PRODUCT, VERSION, RELEASE_PATH, REMOTE_PATH, INSTALL_PATH);
 
             log("DEPLOYMENT SUCCESS");
             session.disconnect();
@@ -77,19 +61,72 @@ public class DeploymentTool {
         } catch (Exception e) {
             log("ERROR: " + e.getMessage());
             e.printStackTrace();
-        } finally {
-            closeLogger();
         }
     }
+    private static String getArg(String[] args, String key) {
+        for (int i = 0; i < args.length - 1; i++) {
+            if (args[i].equalsIgnoreCase(key)) {
+                return args[i + 1];
+            }
+        }
+        return null;
+    }
 
+    private static void executeInteractive(Session session,
+                                           String PRODUCT,
+                                           String VERSION,
+                                           String RELEASE_PATH,
+                                           String REMOTE_PATH,
+                                           String INSTALL_PATH) throws Exception {
+
+        ChannelShell channel = (ChannelShell) session.openChannel("shell");
+        channel.setPty(true);
+
+        InputStream in = channel.getInputStream();
+        OutputStream out = channel.getOutputStream();
+
+        channel.connect();
+
+        PrintWriter writer = new PrintWriter(out, true);
+        BufferedReader reader = new BufferedReader(new InputStreamReader(in));
+
+        String[] commands = new String[] {
+                "sudo su - om",
+                "bash",
+                "cd release_area/",
+                "./manage_releases -l",
+                "./manage_releases --uninstall " + PRODUCT,
+                "ls -lrt",
+                "rm -rf " + PRODUCT + "_REL_" + VERSION,
+                "./manage_releases --hot -r " + RELEASE_PATH +
+                        " -s " + REMOTE_PATH + "CLI_ANY_V1_nei.specification" +
+                        " -i " + INSTALL_PATH +
+                        " -p " + REMOTE_PATH,
+                "exit"
+        };
+
+        for (String cmd : commands) {
+            log("Executing: " + cmd);
+            writer.println(cmd);
+            writer.flush();
+
+            Thread.sleep(3000);
+
+            while (reader.ready()) {
+                log(reader.readLine());
+            }
+        }
+
+        channel.disconnect();
+    }
     // ================= FILE UPLOAD =================
-    private static void uploadFile(Session session, String localFile) throws Exception {
+    private static void uploadFile(Session session, String localFile, String remotePath) throws Exception {
         log("Uploading: " + localFile);
 
         ChannelSftp sftp = (ChannelSftp) session.openChannel("sftp");
         sftp.connect();
 
-        sftp.put(localFile, REMOTE_PATH);
+        sftp.put(localFile, remotePath);
 
         sftp.disconnect();
         log("Upload completed: " + localFile);
@@ -123,15 +160,8 @@ public class DeploymentTool {
     }
 
     private static void log(String msg) {
-        try {
-            String time = new SimpleDateFormat("HH:mm:ss").format(new Date());
-            String line = "[" + time + "] " + msg;
-
-            System.out.println(line);
-            logWriter.write(line);
-            logWriter.newLine();
-            logWriter.flush();
-        } catch (Exception ignored) {}
+        String time = new SimpleDateFormat("HH:mm:ss").format(new Date());
+        System.out.println("[" + time + "] " + msg);
     }
 
     private static void closeLogger() {
