@@ -110,7 +110,7 @@ public class DeploymentTool {
 
             uploadFile(session, LOCAL_CPIO, REMOTE_PATH);
             uploadFile(session, LOCAL_SPEC, REMOTE_PATH);
-//
+
             prepareUploadedFiles(session, fullName, LOCAL_SPEC, REMOTE_PATH);
             log("Permissions and ownership updated");
 
@@ -124,6 +124,15 @@ public class DeploymentTool {
 
             execute(session,
                     "sudo -u om bash -c 'cd " + REMOTE_PATH + " && zcat "+fullName+" | cpio -t'"
+            );
+
+            executeWithAutoEnter(session,
+                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && ./manage_releases --uninstall " + PRODUCT
+            );
+
+
+            execute(session,
+                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && ls -lrt"
             );
 
             log("Using spec file: " + specFileName);
@@ -288,13 +297,13 @@ public class DeploymentTool {
 
         String line;
 
-        // ✅ Read STDOUT
+        // Read STDOUT
         while ((line = reader.readLine()) != null) {
             log(line);
             fullOutput.append(line).append("\n");
         }
 
-        // ✅ Read STDERR
+        // Read STDERR
         while ((line = errReader.readLine()) != null) {
             log("ERROR_STREAM: " + line);
             fullOutput.append(line).append("\n");
@@ -314,26 +323,28 @@ public class DeploymentTool {
 
         // ================= SMART HANDLING =================
 
-        // ✅ 1. Ignore uninstall if product not installed
+        // 1. Ignore uninstall if product not installed
         if (command.contains("--uninstall") && output.contains("not installed")) {
             log("WARNING: Uninstall skipped (product not installed)");
             return;
         }
 
-        // ❌ 2. Invalid package → HARD FAIL
+        // 2. Invalid package → HARD FAIL
         if (output.contains("Invalid cpio package")) {
             throw new RuntimeException("FATAL: Invalid CPIO package. Check your file.");
         }
 
-        // ❌ 3. Missing internal files
+        // 3. Missing internal files
         if (output.contains("No such file or directory")) {
             throw new RuntimeException("FATAL: Package structure broken (missing files inside cpio).");
         }
 
-        // ❌ 4. Generic failure
+        // 4. Generic failure
         if (exitStatus != 0) {
             throw new RuntimeException("Command failed: " + command);
         }
+        System.out.println("");
+        System.out.println("");
     }
     // ================= LOGGER =================
     private static void initLogger() throws IOException {
