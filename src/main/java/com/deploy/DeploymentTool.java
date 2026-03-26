@@ -24,8 +24,18 @@ public class DeploymentTool {
 
     private static BufferedWriter logWriter;
 
+    private static void validateArgs(String... args) {
+        for (String arg : args) {
+            if (arg == null || arg.trim().isEmpty()) {
+                log("ERROR: Missing required argument!");
+                throw new RuntimeException("Missing required argument");
+            }
+        }
+    }
+
     public static void main(String[] args) {
         try {
+            initLogger();
             String HOST = getArg(args, "--host");
             String USER = getArg(args, "--user");
             String KEY = getArg(args, "--key");
@@ -37,30 +47,96 @@ public class DeploymentTool {
             String PRODUCT = getArg(args, "--product");
             String VERSION = getArg(args, "--version");
 
-            log("DEPLOYMENT STARTED");
+            validateArgs(HOST, USER, KEY, LOCAL_CPIO, LOCAL_SPEC,
+                    REMOTE_PATH, RELEASE_PATH, INSTALL_PATH, PRODUCT, VERSION);
+
+            log("Starting Deployment");
 
             JSch jsch = new JSch();
             jsch.addIdentity(KEY);
 
-            Session session = jsch.getSession(USER, HOST, 22);
+            Session session = null;
+
+            session = jsch.getSession(USER, HOST, 22);
             session.setConfig("StrictHostKeyChecking", "no");
-            session.connect();
+            session.connect(30000);
 
-            log("Connected to server");
+//            try {
+//                session = jsch.getSession(USER, HOST, 22);
+//                session.setConfig("StrictHostKeyChecking", "no");
+//                session.connect(30000); // timeout
+//
+//                log("Connected to server");
+//
+//                // your logic...
+//
+//            } catch (Exception e) {
+//                log("FATAL ERROR: " + e.getMessage());
+//                throw e;
+//            } finally {
+//                if (session != null && session.isConnected()) {
+//                    session.disconnect();
+//                    log("Session disconnected");
+//                }
+//            }
 
-            uploadFile(session, LOCAL_CPIO, REMOTE_PATH);
-            uploadFile(session, LOCAL_SPEC, REMOTE_PATH);
+//            uploadFile(session, LOCAL_CPIO, REMOTE_PATH);
+//            uploadFile(session, LOCAL_SPEC, REMOTE_PATH);
+//
+//            prepareUploadedFiles(session, LOCAL_CPIO, LOCAL_SPEC, REMOTE_PATH);
+//            log("Permissions and ownership updated");
 
-            execute(session, "chmod 777 " + REMOTE_PATH + "*");
+            execute(session,
+                    "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases -l'"
+            );
 
-            executeInteractive(session, PRODUCT, VERSION, RELEASE_PATH, REMOTE_PATH, INSTALL_PATH);
+//            execute(session,
+//                    "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases --uninstall " + PRODUCT + "'"
+//            );
+//            execute(session,
+//                    "sudo -u om bash -c \"echo | ./manage_releases --uninstall " + PRODUCT + "\""
+//            );
 
+            if (!LOCAL_CPIO.contains(PRODUCT)) {
+                log("WARNING: Product name and CPIO file mismatch!");
+            }
+
+            execute(session,
+                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && zcat *.cpio.Z | cpio -t'"
+            );
+
+            String specFileName = new File(LOCAL_SPEC).getName();
+            log("Using spec file: " + specFileName);
+
+
+
+            execute(session,
+                    "sudo -u om bash -c 'rm -rf " + RELEASE_PATH + "/" + PRODUCT + "_REL_" + VERSION + "'"
+            );
+
+
+            execute(session,
+                    "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases --hot -r " + RELEASE_PATH +
+                            " -s " + REMOTE_PATH + specFileName +
+                            " -i " + INSTALL_PATH +
+                            " -p " + REMOTE_PATH + "'"
+            );
+//            execute(session,
+//                    "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases --hot -r " + RELEASE_PATH +
+//                            " -s " + REMOTE_PATH + "CLI_ANY_V1_nei.specification" +
+//                            " -i " + INSTALL_PATH +
+//                            " -p " + REMOTE_PATH + "'"
+//            );
+
+//            executeInteractive(session, PRODUCT, VERSION, RELEASE_PATH, REMOTE_PATH, INSTALL_PATH);
             log("DEPLOYMENT SUCCESS");
             session.disconnect();
 
         } catch (Exception e) {
             log("ERROR: " + e.getMessage());
             e.printStackTrace();
+        }finally {
+            closeLogger();
         }
     }
     private static String getArg(String[] args, String key) {
@@ -70,6 +146,47 @@ public class DeploymentTool {
             }
         }
         return null;
+    }
+
+    private static void prepareUploadedFiles(Session session,
+                                             String localCpio,
+                                             String localSpec,
+                                             String remotePath) throws Exception {
+
+        String cpioName = new File(localCpio).getName();
+        String specName = new File(localSpec).getName();
+
+        log("Preparing uploaded files...");
+        log("CPIO: " + cpioName);
+        log("SPEC: " + specName);
+
+        execute(session,
+                "sudo bash -c \"chmod 777 " +
+                        remotePath + cpioName + " " +
+                        remotePath + specName + "\""
+        );
+
+        execute(session,
+                "sudo bash -c \"chown om:cloud-user " +
+                        remotePath + cpioName + " " +
+                        remotePath + specName + "\""
+        );
+
+        log("Permissions and ownership updated successfully");
+    }
+
+    private static void readShellOutput(BufferedReader reader) throws IOException {
+        long waitTime = 3000;
+        long start = System.currentTimeMillis();
+
+        while (System.currentTimeMillis() - start < waitTime) {
+            while (reader.ready()) {
+                String line = reader.readLine();
+                if (line != null) {
+                    log(line);
+                }
+            }
+        }
     }
 
     private static void executeInteractive(Session session,
@@ -107,29 +224,39 @@ public class DeploymentTool {
 
         for (String cmd : commands) {
             log("Executing: " + cmd);
+
             writer.println(cmd);
             writer.flush();
 
             Thread.sleep(3000);
 
-            while (reader.ready()) {
-                log(reader.readLine());
-            }
+            readShellOutput(reader);
         }
-
         channel.disconnect();
     }
+
     // ================= FILE UPLOAD =================
     private static void uploadFile(Session session, String localFile, String remotePath) throws Exception {
+
+        File file = new File(localFile);
+        if (!file.exists()) {
+            throw new RuntimeException("File not found: " + localFile);
+        }
+
         log("Uploading: " + localFile);
 
         ChannelSftp sftp = (ChannelSftp) session.openChannel("sftp");
         sftp.connect();
 
-        sftp.put(localFile, remotePath);
-
-        sftp.disconnect();
-        log("Upload completed: " + localFile);
+        try {
+            sftp.put(localFile, remotePath);
+            log("Upload completed: " + localFile);
+        } catch (Exception e) {
+            log("Upload failed: " + e.getMessage());
+            throw e;
+        } finally {
+            sftp.disconnect();
+        }
     }
 
     // ================= EXECUTE COMMAND =================
@@ -138,21 +265,66 @@ public class DeploymentTool {
 
         ChannelExec channel = (ChannelExec) session.openChannel("exec");
         channel.setCommand(command);
-        channel.setErrStream(System.err);
 
         InputStream in = channel.getInputStream();
+        InputStream err = channel.getErrStream();
+
         channel.connect();
 
         BufferedReader reader = new BufferedReader(new InputStreamReader(in));
+        BufferedReader errReader = new BufferedReader(new InputStreamReader(err));
+
+        StringBuilder fullOutput = new StringBuilder(); // 🔥 NEW
+
         String line;
 
+        // ✅ Read STDOUT
         while ((line = reader.readLine()) != null) {
             log(line);
+            fullOutput.append(line).append("\n");
         }
 
-        channel.disconnect();
-    }
+        // ✅ Read STDERR
+        while ((line = errReader.readLine()) != null) {
+            log("ERROR_STREAM: " + line);
+            fullOutput.append(line).append("\n");
+        }
 
+        // Wait for command completion
+        while (!channel.isClosed()) {
+            Thread.sleep(1000);
+        }
+
+        int exitStatus = channel.getExitStatus();
+        log("Exit Status: " + exitStatus);
+
+        channel.disconnect();
+
+        String output = fullOutput.toString();
+
+        // ================= SMART HANDLING =================
+
+        // ✅ 1. Ignore uninstall if product not installed
+        if (command.contains("--uninstall") && output.contains("not installed")) {
+            log("WARNING: Uninstall skipped (product not installed)");
+            return;
+        }
+
+        // ❌ 2. Invalid package → HARD FAIL
+        if (output.contains("Invalid cpio package")) {
+            throw new RuntimeException("FATAL: Invalid CPIO package. Check your file.");
+        }
+
+        // ❌ 3. Missing internal files
+        if (output.contains("No such file or directory")) {
+            throw new RuntimeException("FATAL: Package structure broken (missing files inside cpio).");
+        }
+
+        // ❌ 4. Generic failure
+        if (exitStatus != 0) {
+            throw new RuntimeException("Command failed: " + command);
+        }
+    }
     // ================= LOGGER =================
     private static void initLogger() throws IOException {
         String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
@@ -160,8 +332,20 @@ public class DeploymentTool {
     }
 
     private static void log(String msg) {
-        String time = new SimpleDateFormat("HH:mm:ss").format(new Date());
-        System.out.println("[" + time + "] " + msg);
+        try {
+            String time = new SimpleDateFormat("HH:mm:ss").format(new Date());
+            String logMsg = "[" + time + "] " + msg;
+
+            System.out.println(logMsg);
+
+            if (logWriter != null) {
+                logWriter.write(logMsg);
+                logWriter.newLine();
+                logWriter.flush();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     private static void closeLogger() {
