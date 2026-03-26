@@ -29,17 +29,15 @@ public class DeploymentTool {
     private static String[] extractProductAndVersion(String cpioPath) {
         String fileName = new File(cpioPath).getName();
 
-        Pattern pattern = Pattern.compile("^(.*)-([0-9]+(?:\\.[0-9]+)*)\\.cpio\\.Z$");
+        Pattern pattern = Pattern.compile("^((.*)-([0-9]+(?:\\.[0-9]+)*))\\.cpio\\.Z$");
         Matcher matcher = pattern.matcher(fileName);
 
         if (matcher.matches()) {
-            String product = matcher.group(1);
-            String version = matcher.group(2);
+            String product  = matcher.group(2);   // JAVA_CLI_ANY_V1
+            String version  = matcher.group(3);   // 1.1.5
 
-            // Complete file name without extension
-            String fullName = product + "-" + version;
 
-            return new String[]{product, version, fullName};
+            return new String[]{product, version};
         } else {
             throw new RuntimeException("Invalid CPIO filename format: " + fileName);
         }
@@ -70,7 +68,9 @@ public class DeploymentTool {
 
             String PRODUCT = result[0];
             String VERSION = result[1];
-            String fullName = result[2];
+            String fullName = new File(LOCAL_CPIO).getName();
+
+            String specFileName = new File(LOCAL_SPEC).getName();
 
             log("Extracted PRODUCT: " + PRODUCT);
             log("Extracted VERSION: " + VERSION);
@@ -110,38 +110,27 @@ public class DeploymentTool {
 
             uploadFile(session, LOCAL_CPIO, REMOTE_PATH);
             uploadFile(session, LOCAL_SPEC, REMOTE_PATH);
-
-            prepareUploadedFiles(session, LOCAL_CPIO, LOCAL_SPEC, REMOTE_PATH);
+//
+            prepareUploadedFiles(session, fullName, LOCAL_SPEC, REMOTE_PATH);
             log("Permissions and ownership updated");
 
             execute(session,
                     "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases -l'"
             );
 
-//            execute(session,
-//                    "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases --uninstall " + PRODUCT + "'"
-//            );
-//            execute(session,
-//                    "sudo -u om bash -c \"echo | ./manage_releases --uninstall " + PRODUCT + "\""
-//            );
-
             if (!LOCAL_CPIO.contains(PRODUCT)) {
                 log("WARNING: Product name and CPIO file mismatch!");
             }
 
             execute(session,
-                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && zcat *.cpio.Z | cpio -t'"
+                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && zcat "+fullName+" | cpio -t'"
             );
 
-            String specFileName = new File(LOCAL_SPEC).getName();
             log("Using spec file: " + specFileName);
-
-
 
             execute(session,
                     "sudo -u om bash -c 'rm -rf " + RELEASE_PATH + "/" + PRODUCT + "_REL_" + VERSION + "'"
             );
-
 
             execute(session,
                     "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases --hot -r " + RELEASE_PATH +
@@ -149,14 +138,7 @@ public class DeploymentTool {
                             " -i " + INSTALL_PATH +
                             " -p " + REMOTE_PATH + "'"
             );
-//            execute(session,
-//                    "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases --hot -r " + RELEASE_PATH +
-//                            " -s " + REMOTE_PATH + "CLI_ANY_V1_nei.specification" +
-//                            " -i " + INSTALL_PATH +
-//                            " -p " + REMOTE_PATH + "'"
-//            );
 
-//            executeInteractive(session, PRODUCT, VERSION, RELEASE_PATH, REMOTE_PATH, INSTALL_PATH);
             log("DEPLOYMENT SUCCESS");
             session.disconnect();
 
