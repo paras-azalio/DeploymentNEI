@@ -5,6 +5,8 @@ import com.jcraft.jsch.*;
 import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class DeploymentTool {
 
@@ -23,6 +25,25 @@ public class DeploymentTool {
 //    private static final String VERSION = "1.1.4";
 
     private static BufferedWriter logWriter;
+
+    private static String[] extractProductAndVersion(String cpioPath) {
+        String fileName = new File(cpioPath).getName();
+
+        Pattern pattern = Pattern.compile("^(.*)-([0-9]+(?:\\.[0-9]+)*)\\.cpio\\.Z$");
+        Matcher matcher = pattern.matcher(fileName);
+
+        if (matcher.matches()) {
+            String product = matcher.group(1);
+            String version = matcher.group(2);
+
+            // Complete file name without extension
+            String fullName = product + "-" + version;
+
+            return new String[]{product, version, fullName};
+        } else {
+            throw new RuntimeException("Invalid CPIO filename format: " + fileName);
+        }
+    }
 
     private static void validateArgs(String... args) {
         for (String arg : args) {
@@ -44,8 +65,15 @@ public class DeploymentTool {
             String REMOTE_PATH = getArg(args, "--remote-path");
             String RELEASE_PATH = getArg(args, "--release-path");
             String INSTALL_PATH = getArg(args, "--install-path");
-            String PRODUCT = getArg(args, "--product");
-            String VERSION = getArg(args, "--version");
+
+            String[] result = extractProductAndVersion(LOCAL_CPIO);
+
+            String PRODUCT = result[0];
+            String VERSION = result[1];
+            String fullName = result[2];
+
+            log("Extracted PRODUCT: " + PRODUCT);
+            log("Extracted VERSION: " + VERSION);
 
             validateArgs(HOST, USER, KEY, LOCAL_CPIO, LOCAL_SPEC,
                     REMOTE_PATH, RELEASE_PATH, INSTALL_PATH, PRODUCT, VERSION);
@@ -80,11 +108,11 @@ public class DeploymentTool {
 //                }
 //            }
 
-//            uploadFile(session, LOCAL_CPIO, REMOTE_PATH);
-//            uploadFile(session, LOCAL_SPEC, REMOTE_PATH);
-//
-//            prepareUploadedFiles(session, LOCAL_CPIO, LOCAL_SPEC, REMOTE_PATH);
-//            log("Permissions and ownership updated");
+            uploadFile(session, LOCAL_CPIO, REMOTE_PATH);
+            uploadFile(session, LOCAL_SPEC, REMOTE_PATH);
+
+            prepareUploadedFiles(session, LOCAL_CPIO, LOCAL_SPEC, REMOTE_PATH);
+            log("Permissions and ownership updated");
 
             execute(session,
                     "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases -l'"
