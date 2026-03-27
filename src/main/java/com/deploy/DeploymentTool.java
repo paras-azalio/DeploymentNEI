@@ -108,41 +108,47 @@ public class DeploymentTool {
 //                }
 //            }
 
-            uploadFile(session, LOCAL_CPIO, REMOTE_PATH);
-            uploadFile(session, LOCAL_SPEC, REMOTE_PATH);
+//            uploadFile(session, LOCAL_CPIO, REMOTE_PATH);
+//            uploadFile(session, LOCAL_SPEC, REMOTE_PATH);
+//
+//            prepareUploadedFiles(session, fullName, LOCAL_SPEC, REMOTE_PATH);
+//            log("Permissions and ownership updated");
+//
+//            execute(session,
+//                    "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases -l'"
+//            );
+//
+//            if (!LOCAL_CPIO.contains(PRODUCT)) {
+//                log("WARNING: Product name and CPIO file mismatch!");
+//            }
 
-            prepareUploadedFiles(session, fullName, LOCAL_SPEC, REMOTE_PATH);
-            log("Permissions and ownership updated");
+//            execute(session,
+//                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && zcat "+fullName+" | cpio -t'"
+//            );
 
-            execute(session,
-                    "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases -l'"
-            );
-
-            if (!LOCAL_CPIO.contains(PRODUCT)) {
-                log("WARNING: Product name and CPIO file mismatch!");
-            }
-
-            execute(session,
-                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && zcat "+fullName+" | cpio -t'"
-            );
-
-            executeWithAutoEnter(session,
-                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && ./manage_releases --uninstall " + PRODUCT
-            );
+//            executeWithAutoEnter(session,
+//                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && ./manage_releases --uninstall " + PRODUCT
+//            );
+//            executeWithAutoEnter(session, REMOTE_PATH, PRODUCT);
 
 
-            execute(session,
-                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && ls -lrt"
-            );
+//            execute(session,
+//                    "sudo -u om bash -c 'cd " + REMOTE_PATH + " && ls -lrt"
+//            );
 
             log("Using spec file: " + specFileName);
 
             execute(session,
                     "sudo -u om bash -c 'rm -rf " + RELEASE_PATH + "/" + PRODUCT + "_REL_" + VERSION + "'"
             );
+//            System.out.println("sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases -l'");
+//
+//            System.out.println("sudo -u om bash -c 'cd " + REMOTE_PATH + " && zcat "+fullName+" | cpio -t'");
+//            System.out.println("sudo -u om bash -c 'rm -rf " + RELEASE_PATH + "/" + PRODUCT + "_REL_" + VERSION + "'");
+
 
             execute(session,
-                    "sudo -u om bash -c 'cd " + RELEASE_PATH + " && ./manage_releases --hot -r " + RELEASE_PATH +
+                    "sudo -u om bash -c 'cd release_area/ && ./manage_releases -l" + " && ./manage_releases --hot -r " + RELEASE_PATH +
                             " -s " + REMOTE_PATH + specFileName +
                             " -i " + INSTALL_PATH +
                             " -p " + REMOTE_PATH + "'"
@@ -194,26 +200,9 @@ public class DeploymentTool {
         log("Permissions and ownership updated successfully");
     }
 
-    private static void readShellOutput(BufferedReader reader) throws IOException {
-        long waitTime = 3000;
-        long start = System.currentTimeMillis();
+    private static void executeWithAutoEnter(Session session, String remotePath, String product) throws Exception {
 
-        while (System.currentTimeMillis() - start < waitTime) {
-            while (reader.ready()) {
-                String line = reader.readLine();
-                if (line != null) {
-                    log(line);
-                }
-            }
-        }
-    }
-
-    private static void executeInteractive(Session session,
-                                           String PRODUCT,
-                                           String VERSION,
-                                           String RELEASE_PATH,
-                                           String REMOTE_PATH,
-                                           String INSTALL_PATH) throws Exception {
+        log("Executing interactive uninstall...");
 
         ChannelShell channel = (ChannelShell) session.openChannel("shell");
         channel.setPty(true);
@@ -224,37 +213,98 @@ public class DeploymentTool {
         channel.connect();
 
         PrintWriter writer = new PrintWriter(out, true);
-        BufferedReader reader = new BufferedReader(new InputStreamReader(in));
 
-        String[] commands = new String[] {
-                "sudo su - om",
-                "bash",
-                "cd release_area/",
-                "./manage_releases -l",
-                "./manage_releases --uninstall " + PRODUCT,
-                "ls -lrt",
-                "rm -rf " + PRODUCT + "_REL_" + VERSION,
-                "./manage_releases --hot -r " + RELEASE_PATH +
-                        " -s " + REMOTE_PATH + "CLI_ANY_V1_nei.specification" +
-                        " -i " + INSTALL_PATH +
-                        " -p " + REMOTE_PATH,
-                "exit"
-        };
+        // Step 1: switch user
+        writer.println("sudo -u om -i");
+        writer.flush();
+        Thread.sleep(2000);
 
-        for (String cmd : commands) {
-            log("Executing: " + cmd);
+        // Step 2: go to directory
+        writer.println("cd " + remotePath);
+        writer.flush();
+        Thread.sleep(1000);
 
-            writer.println(cmd);
-            writer.flush();
+        // Step 3: run uninstall
+        writer.println("./manage_releases --uninstall " + product);
+        writer.flush();
 
-            Thread.sleep(3000);
+        Thread.sleep(2000);
 
-            readShellOutput(reader);
+        // Step 4: send ENTER
+        log("Sending ENTER...");
+        writer.println("");
+        writer.flush();
+
+        // Step 5: read output properly
+        byte[] buffer = new byte[1024];
+
+        while (true) {
+
+            while (in.available() > 0) {
+                int i = in.read(buffer);
+                if (i < 0) break;
+
+                String output = new String(buffer, 0, i);
+                log(output);
+            }
+
+            if (channel.isClosed()) {
+                if (in.available() > 0) continue;
+                break;
+            }
+
+            Thread.sleep(500);
         }
+
         channel.disconnect();
     }
+//    private static void executeInteractive(Session session,
+//                                           String PRODUCT,
+//                                           String VERSION,
+//                                           String RELEASE_PATH,
+//                                           String REMOTE_PATH,
+//                                           String INSTALL_PATH) throws Exception {
+//
+//        ChannelShell channel = (ChannelShell) session.openChannel("shell");
+//        channel.setPty(true);
+//
+//        InputStream in = channel.getInputStream();
+//        OutputStream out = channel.getOutputStream();
+//
+//        channel.connect();
+//
+//        PrintWriter writer = new PrintWriter(out, true);
+//        BufferedReader reader = new BufferedReader(new InputStreamReader(in));
+//
+//        String[] commands = new String[] {
+//                "sudo su - om",
+//                "bash",
+//                "cd release_area/",
+//                "./manage_releases -l",
+//                "./manage_releases --uninstall " + PRODUCT,
+//                "ls -lrt",
+//                "rm -rf " + PRODUCT + "_REL_" + VERSION,
+//                "./manage_releases --hot -r " + RELEASE_PATH +
+//                        " -s " + REMOTE_PATH + "CLI_ANY_V1_nei.specification" +
+//                        " -i " + INSTALL_PATH +
+//                        " -p " + REMOTE_PATH,
+//                "exit"
+//        };
+//
+//        for (String cmd : commands) {
+//            log("Executing: " + cmd);
+//
+//            writer.println(cmd);
+//            writer.flush();
+//
+//            Thread.sleep(3000);
+//
+//            readShellOutput(reader);
+//        }
+//        channel.disconnect();
+//    }
 
-    // ================= FILE UPLOAD =================
+    // ================= FILE UPLOAD ======================================================================================================
     private static void uploadFile(Session session, String localFile, String remotePath) throws Exception {
 
         File file = new File(localFile);
@@ -278,7 +328,7 @@ public class DeploymentTool {
         }
     }
 
-    // ================= EXECUTE COMMAND =================
+    // ================= EXECUTE COMMAND ======================================================================================================
     private static void execute(Session session, String command) throws Exception {
         log("Executing: " + command);
 
